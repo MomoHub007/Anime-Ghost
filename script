@@ -906,16 +906,16 @@ local MainTab = Window:Tab({Title = "Main", Icon = "star"}) do
         end
     })
 
-    MainTab:Section({Title = "Auto Potion"})
+	MainTab:Section({Title = "Auto Potion"})
 
     MainTab:Dropdown({
         Title = "Select Potions",
         List = {
-            "EnergyPotion1", "EnergyPotion2",
-            "DamagePotion1", "DamagePotion2",
-            "DropPotion1", "DropPotion2",
-            "LuckPotion1", "LuckPotion2",
-            "GhostPotion1", "GhostPotion2"
+            "EnergyPotion1", "EnergyPotion2", "EnergyPotion3",
+            "DamagePotion1", "DamagePotion2", "DamagePotion3",
+            "DropPotion1", "DropPotion2", "DropPotion3",
+            "LuckPotion1", "LuckPotion2", "LuckPotion3",
+            "GhostPotion1", "GhostPotion2", "GhostPotion3"
         },
         Value = MoMoConfig.SelectedPotions,
         Multi = true,
