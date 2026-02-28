@@ -1,0 +1,1547 @@
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualUser = game:GetService("VirtualUser")
+local UserInputService = game:GetService("UserInputService") 
+
+local player = Players.LocalPlayer
+
+-- ==========================================
+-- Get Game RemoteEvent
+-- ==========================================
+local remoteEvent = ReplicatedStorage:WaitForChild("ffrostflame_bridgenet2@1.0.0"):WaitForChild("dataRemoteEvent")
+
+-- Special Status Variables (Prevent teleport glitching)
+local isSpinning = false 
+local isInRaid = false 
+local isLeavingRaid = false
+local isEnteringRaid = false 
+
+-- ==========================================
+-- Auto Close GAME RESULT Window
+-- ==========================================
+local function autoCloseGameResult()
+    local pGui = player:FindFirstChild("PlayerGui")
+    if not pGui then return end
+    
+    for _, obj in ipairs(pGui:GetDescendants()) do
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local text = obj.ContentText
+            if not text or text == "" then text = obj.Text end 
+            
+            if text == "GAME RESULT" or text == "Return" then
+                local screenGui = obj:FindFirstAncestorWhichIsA("ScreenGui")
+                if screenGui and screenGui.Enabled then
+                    screenGui.Enabled = false 
+                end
+            end
+        end
+    end
+end
+
+-- ==========================================
+-- Raid UI & Data Scanners
+-- ==========================================
+local function checkRaidDelay()
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if not playerGui then return false end
+    
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("TextLabel") or obj:IsA("TextBox") or obj:IsA("TextButton") then
+            local text = obj.ContentText
+            if not text or text == "" then text = obj.Text end 
+            
+            if text and string.find(text, "Able to Create/Join Raid") then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Check if character is inside the Raid map (Based on Spawn distance)
+local function checkIfInRaidMap()
+    local character = player.Character
+    if not character then return false end
+    local playerRoot = character:FindFirstChild("HumanoidRootPart")
+    if not playerRoot then return false end
+
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder then
+        local gamemode = mapFolder:FindFirstChild("Gamemode")
+        if gamemode then
+            local raidMap = gamemode:FindFirstChild("120578156")
+            if raidMap then
+                local spawnPoint = raidMap:FindFirstChild("Spawn")
+                if spawnPoint and spawnPoint:IsA("BasePart") then
+                    local distance = (playerRoot.Position - spawnPoint.Position).Magnitude
+                    if distance < 3000 then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function getCurrentWave()
+    local pGui = player:FindFirstChild("PlayerGui")
+    if pGui then
+        local modeGui = pGui:FindFirstChild("Mode")
+        if modeGui then
+            local content = modeGui:FindFirstChild("Content")
+            if content then
+                local start = content:FindFirstChild("Start")
+                if start and start:FindFirstChild("Label") then
+                    local text = start.Label.ContentText
+                    if text == "" then text = start.Label.Text end 
+                    
+                    local waveNum = string.match(text, "(%d+)")
+                    if waveNum then
+                        return tonumber(waveNum)
+                    end
+                end
+            end
+        end
+    end
+    return 0
+end
+
+-- ==========================================
+-- Enemy Scanning Functions
+-- ==========================================
+local function getClosestEnemy()
+    local character = player.Character
+    if not character then return nil, math.huge end
+    local playerRoot = character:FindFirstChild("HumanoidRootPart")
+    if not playerRoot then return nil, math.huge end
+
+    local clientFolder = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Client")
+    if not clientFolder then return nil, math.huge end
+
+    local closestEnemy = nil
+    local shortestDistance = math.huge
+
+    for _, enemy in ipairs(clientFolder:GetChildren()) do
+        local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+        if enemyRoot then
+            local distance = (playerRoot.Position - enemyRoot.Position).Magnitude
+            if distance < shortestDistance then
+                shortestDistance = distance
+                closestEnemy = enemy
+            end
+        end
+    end
+
+    return closestEnemy, shortestDistance
+end
+
+local function getClosestEnemyByName(targetName)
+    local character = player.Character
+    if not character then return nil end
+    local playerRoot = character:FindFirstChild("HumanoidRootPart")
+    if not playerRoot then return nil end
+
+    local clientFolder = workspace:FindFirstChild("_ENEMIES") and workspace._ENEMIES:FindFirstChild("Client")
+    if not clientFolder then return nil end
+
+    local closestEnemy = nil
+    local shortestDistance = math.huge
+
+    for _, enemy in ipairs(clientFolder:GetChildren()) do
+        local billboard = enemy:FindFirstChild("EnemyBillboard")
+        if billboard then
+            local title = billboard:FindFirstChild("Title")
+            if title and title:IsA("TextLabel") and title.Text == targetName then
+                local enemyRoot = enemy:FindFirstChild("HumanoidRootPart")
+                if enemyRoot then
+                    local distance = (playerRoot.Position - enemyRoot.Position).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestEnemy = enemy
+                    end
+                end
+            end
+        end
+    end
+
+    return closestEnemy
+end
+
+-- ==========================================
+-- Gacha Spin Functions (World 1, 2, 3)
+-- ==========================================
+local function RollTitanSerumSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("1") then
+        local interactions = mapFolder["1"]:FindFirstChild("Interactions")
+        if interactions then
+            local gachaNPC = interactions:FindFirstChild("Gacha")
+            if gachaNPC then
+                npcBase = gachaNPC:FindFirstChild("HumanoidRootPart") or gachaNPC:FindFirstChild("Torso") or gachaNPC:FindFirstChildWhichIsA("BasePart")
+            end
+        end
+    end
+
+    local args = { { { "GachaSystem", "Spin", "Titan Serum", "Normal", { Jupiter = true, AttackSerum = true, TrueQuincy = true, Mythical = true, Phantom = true, Secret = true, Earth = true, Electric6 = true, Shirayuki = true, SRank = true, Ruin6 = true, ColossalSerum = true, Holy = true, TurboGranny = true, National = true, Blessed6 = true, Blessing = true, Sonic = true, Haunt6 = true, Blessed5 = true, Ruin5 = true, Haunt5 = true, Nozarashi = true, EvilEye = true, Visored = true, Afterlife = true, Electric5 = true }, n = 5 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollTitanScrollSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("1") then
+        local eggs = mapFolder["1"]:FindFirstChild("Eggs")
+        if eggs then
+            local scrollNPC = eggs:FindFirstChild("Titan Scroll")
+            if scrollNPC then
+                npcBase = scrollNPC:FindFirstChild("HumanoidRootPart") or scrollNPC:FindFirstChild("Torso") or scrollNPC:FindFirstChildWhichIsA("BasePart")
+            end
+        end
+    end
+
+    -- อัปเดต Args ให้ใช้การเปิดแบบ "All" และ Toggle "AutoOpening"
+    local args = { { { "SettingSystem", "Toggle", "AutoOpening", n = 3 }, "\002", { "PetSystem", "Open", "Titan Scroll", "All", n = 4 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollPossessionSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("2") then
+        local interactions = mapFolder["2"]:FindFirstChild("Interactions")
+        if interactions then
+            local gachaNPC = interactions:FindFirstChild("Gacha")
+            if gachaNPC then
+                npcBase = gachaNPC:FindFirstChild("HumanoidRootPart") or gachaNPC:FindFirstChild("Torso") or gachaNPC:FindFirstChildWhichIsA("BasePart")
+            end
+        end
+    end
+
+    local args = { { { "GachaSystem", "Spin", "Possession", "Normal", { Jupiter = true, AttackSerum = true, TrueQuincy = true, Mythical = true, Phantom = true, Secret = true, Earth = true, Electric6 = true, Shirayuki = true, SRank = true, Ruin6 = true, ColossalSerum = true, Holy = true, TurboGranny = true, National = true, Blessed6 = true, Blessing = true, Sonic = true, Haunt6 = true, Blessed5 = true, Ruin5 = true, Haunt5 = true, Nozarashi = true, EvilEye = true, Visored = true, Afterlife = true, Electric5 = true }, n = 5 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollSupernaturalScrollSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("2") then
+        local eggs = mapFolder["2"]:FindFirstChild("Eggs")
+        if eggs then
+            local children = eggs:GetChildren()
+            if #children >= 2 then
+                local scrollNPC = children[2] 
+                if scrollNPC then
+                    npcBase = scrollNPC:FindFirstChild("HumanoidRootPart") or scrollNPC:FindFirstChild("Torso") or scrollNPC:FindFirstChildWhichIsA("BasePart")
+                end
+            end
+        end
+    end
+
+    -- อัปเดต Args ให้ใช้การเปิดแบบ "All" และ Toggle "AutoOpening"
+    local args = { { { "SettingSystem", "Toggle", "AutoOpening", n = 3 }, "\002", { "PetSystem", "Open", "Supernatural Scroll", "All", n = 4 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollSpiritualScrollSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("3") then
+        local eggs = mapFolder["3"]:FindFirstChild("Eggs")
+        if eggs then
+            local scrollNPC = eggs:FindFirstChild("Spiritual Scroll")
+            if scrollNPC then
+                npcBase = scrollNPC:FindFirstChild("HumanoidRootPart") or scrollNPC:FindFirstChild("Torso") or scrollNPC:FindFirstChildWhichIsA("BasePart")
+            end
+        end
+    end
+
+    -- อัปเดต Args ให้ใช้การเปิดแบบ "All" และ Toggle "AutoOpening"
+    local args = { { { "SettingSystem", "Toggle", "AutoOpening", n = 3 }, "\002", { "PetSystem", "Open", "Spiritual Scroll", "All", n = 4 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollZanpakutoSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("3") then
+        local interactions = mapFolder["3"]:FindFirstChild("Interactions")
+        if interactions then
+            local children = interactions:GetChildren()
+            if #children >= 2 then
+                local gachaNPC = children[2]
+                if gachaNPC then
+                    npcBase = gachaNPC:FindFirstChild("HumanoidRootPart") or gachaNPC:FindFirstChild("Torso") or gachaNPC:FindFirstChildWhichIsA("BasePart")
+                end
+            end
+        end
+    end
+
+    local args = { { { "GachaSystem", "Spin", "Zanpakuto", "Normal", { Jupiter = true, AttackSerum = true, TrueQuincy = true, Mythical = true, Phantom = true, Secret = true, Earth = true, Electric6 = true, Shirayuki = true, SRank = true, Ruin6 = true, ColossalSerum = true, Holy = true, TurboGranny = true, National = true, Blessed6 = true, Blessing = true, Sonic = true, Haunt6 = true, Blessed5 = true, Ruin5 = true, Haunt5 = true, Nozarashi = true, EvilEye = true, Visored = true, Afterlife = true, Electric5 = true }, n = 5 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollPowerOfThePlanetSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("3") then
+        local interactions = mapFolder["3"]:FindFirstChild("Interactions")
+        if interactions then
+            local gachaNPC = interactions:FindFirstChild("Gacha")
+            if gachaNPC then
+                npcBase = gachaNPC:FindFirstChild("HumanoidRootPart") or gachaNPC:FindFirstChild("Torso") or gachaNPC:FindFirstChildWhichIsA("BasePart")
+            end
+        end
+    end
+
+    local args = { { { "GachaSystem", "Spin", "Power of the Planet", "Normal", { Jupiter = true, AttackSerum = true, TrueQuincy = true, Mythical = true, Phantom = true, Secret = true, Earth = true, Electric6 = true, Shirayuki = true, SRank = true, Ruin6 = true, ColossalSerum = true, Holy = true, TurboGranny = true, National = true, Blessed6 = true, Blessing = true, Sonic = true, Haunt6 = true, Blessed5 = true, Ruin5 = true, Haunt5 = true, Nozarashi = true, EvilEye = true, Visored = true, Afterlife = true, Electric5 = true }, n = 5 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+local function RollSoulFundationSafe()
+    local char = player.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local npcBase = nil
+    local mapFolder = workspace:FindFirstChild("_MAP")
+    if mapFolder and mapFolder:FindFirstChild("3") then
+        local interactions = mapFolder["3"]:FindFirstChild("Interactions")
+        if interactions then
+            local children = interactions:GetChildren()
+            if #children >= 3 then
+                local gachaNPC = children[3]
+                if gachaNPC then
+                    npcBase = gachaNPC:FindFirstChild("HumanoidRootPart") or gachaNPC:FindFirstChild("Torso") or gachaNPC:FindFirstChildWhichIsA("BasePart")
+                end
+            end
+        end
+    end
+
+    local args = { { { "GachaSystem", "Spin", "Soul Fundation", "Normal", { Jupiter = true, AttackSerum = true, TrueQuincy = true, Mythical = true, Phantom = true, Secret = true, Earth = true, Electric6 = true, Shirayuki = true, SRank = true, Ruin6 = true, ColossalSerum = true, Holy = true, TurboGranny = true, National = true, Blessed6 = true, Blessing = true, Sonic = true, Haunt6 = true, Blessed5 = true, Ruin5 = true, Haunt5 = true, Nozarashi = true, EvilEye = true, Visored = true, Afterlife = true, Electric5 = true }, n = 5 }, "\002" } }
+
+    if npcBase then
+        isSpinning = true
+        if (root.Position - npcBase.Position).Magnitude > 15 then
+            local oldCFrame = root.CFrame 
+            root.CFrame = npcBase.CFrame + Vector3.new(0, 3, 0)
+            task.wait(0.3) 
+            pcall(function() remoteEvent:FireServer(unpack(args)) end) 
+            task.wait(0.2) 
+            root.Anchored = false 
+            root.CFrame = oldCFrame 
+        else
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+        end
+        task.wait(0.1)
+        isSpinning = false
+    end
+end
+
+-- ==========================================
+-- Config Logic (Save / Load)
+-- ==========================================
+local ConfigFolder = "MoMoHub_Data"
+local ConfigFile = ConfigFolder .. "/Settings.json"
+
+local DefaultConfig = {
+    AutoClick = false,
+    AutoTeleport = false,
+    AutoRebirth = false, 
+    SelectedEnemy = "Female Giant", 
+    FarmMode = "Select Target", 
+    WalkSpeed = 16,
+    JumpPower = 50,
+    AntiAFK = false,
+    AutoSave = false,
+    AutoLoad = false,
+    SelectedSpinW1 = "Titan Serum", 
+    AutoRollW1 = false,
+    SelectedSpinW2 = "Possession",
+    AutoRollW2 = false,
+    SelectedUpgradesW2 = {},  
+    AutoUpgradeW2 = false,
+    SelectedSpinW3 = "Spiritual Scroll", 
+    AutoRollW3 = false,                  
+    SelectedPotions = {},
+    AutoPotion = false,
+
+    -- Raid Mode
+    AutoRaid = false,
+    AutoLeaveRaid = false,
+    LeaveWave = "15",
+    ReturnWorld = "3"
+}
+
+local MoMoConfig = {}
+
+if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end
+
+local function LoadConfig()
+    if isfile and isfile(ConfigFile) then
+        local success, decoded = pcall(function() return HttpService:JSONDecode(readfile(ConfigFile)) end)
+        if success and type(decoded) == "table" then
+            for k, v in pairs(DefaultConfig) do if decoded[k] == nil then decoded[k] = v end end
+            return decoded
+        end
+    end
+    return DefaultConfig
+end
+
+local SavedData = LoadConfig()
+if SavedData.AutoLoad then
+    MoMoConfig = SavedData
+else
+    MoMoConfig = DefaultConfig
+    MoMoConfig.AutoLoad = SavedData.AutoLoad 
+    MoMoConfig.AutoSave = SavedData.AutoSave 
+end
+
+local function SaveConfig()
+    if writefile then
+        local success, encoded = pcall(function() return HttpService:JSONEncode(MoMoConfig) end)
+        if success then writefile(ConfigFile, encoded) end
+    end
+end
+
+local function CheckAndSave() if MoMoConfig.AutoSave then SaveConfig() end end
+
+-- ==========================================
+-- Init UI
+-- ==========================================
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/x2zu/OPEN-SOURCE-UI-ROBLOX/refs/heads/main/X2ZU%20UI%20ROBLOX%20OPEN%20SOURCE/DummyUi-leak-by-x2zu/fetching-main/Tools/Framework.luau"))()
+
+local Window = Library:Window({
+    Title = "MoMoHub",
+    Desc = "Welcome to the best script hub",
+    Icon = "badge-check",
+    Theme = "Amethyst",
+    Color = Color3.fromRGB(170, 0, 255), 
+    Config = { Keybind = Enum.KeyCode.LeftControl, Size = UDim2.new(0, 500, 0, 450) },
+    CloseUIButton = { Enabled = false, Text = "" } 
+})
+
+-- ==========================================
+-- Create Draggable Toggle Button
+-- ==========================================
+local targetGui = (gethui and gethui()) or game:GetService("CoreGui") or Players.LocalPlayer:WaitForChild("PlayerGui")
+
+local CustomGui = Instance.new("ScreenGui")
+CustomGui.Name = "MoMoHubToggleUI"
+CustomGui.ResetOnSpawn = false
+CustomGui.Parent = targetGui
+
+local ToggleBtn = Instance.new("ImageButton")
+ToggleBtn.Name = "MoMoHubToggle"
+ToggleBtn.Parent = CustomGui
+ToggleBtn.Position = UDim2.new(0, 300, 0.5, -200) 
+ToggleBtn.Size = UDim2.new(0, 50, 0, 50) 
+ToggleBtn.BackgroundTransparency = 1 
+ToggleBtn.Image = "rbxthumb://type=Asset&id=82100122245666&w=150&h=150"
+
+local dragging, dragInput, dragStart, startPos
+
+ToggleBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = ToggleBtn.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+
+ToggleBtn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        ToggleBtn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+local vim = game:GetService("VirtualInputManager")
+local isClickingUI = false
+
+ToggleBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isClickingUI = true end
+end)
+
+ToggleBtn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then isClickingUI = false end
+end)
+
+ToggleBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and isClickingUI then
+        pcall(function()
+            vim:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+            task.wait(0.05)
+            vim:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+        end)
+    end
+end)
+
+local SidebarLine = Instance.new("Frame")
+SidebarLine.Size = UDim2.new(0, 2, 1, 0)
+SidebarLine.Position = UDim2.new(0, 140, 0, 0)
+SidebarLine.BackgroundColor3 = Color3.fromRGB(170, 0, 255)
+SidebarLine.BorderSizePixel = 0
+SidebarLine.ZIndex = 5
+SidebarLine.Name = "SidebarLine"
+SidebarLine.Parent = game:GetService("CoreGui") 
+
+local Glow = Instance.new("UIStroke")
+Glow.Color = Color3.fromRGB(138, 43, 226)
+Glow.Thickness = 1
+Glow.Transparency = 0.2
+Glow.Parent = SidebarLine
+
+-- ==========================================
+-- Tab 1: Main
+-- ==========================================
+local isAutoClickRunning = false
+local isAutoTeleporting = false
+
+local MainTab = Window:Tab({Title = "Main", Icon = "star"}) do
+    
+    MainTab:Section({Title = "Target Selection"})
+
+    MainTab:Dropdown({
+        Title = "Farm Mode",
+        List = {"Select Target", "Near Monster"},
+        Value = MoMoConfig.FarmMode,
+        Callback = function(Value)
+            MoMoConfig.FarmMode = Value
+            CheckAndSave()
+        end
+    })
+    
+    local HardcodedEnemies = {
+        "Armored Giant", 
+        "Female Giant",
+        "Beast Giant",
+        "Colossal Giant",
+        "Jaw Giant",
+        "Granny",
+        "Maid Guy",
+        "Alien Guy",
+        "Alien Guy (Real)",
+        "Turbo Granny",
+        "Noble Captain",
+        "Sliver Snake",
+        "Winged Despair",
+        "Battle Berserker",
+        "Sealed Mastermind"
+    }
+
+    local savedTarget = MoMoConfig.SelectedEnemy
+    if not table.find(HardcodedEnemies, savedTarget) then
+        savedTarget = HardcodedEnemies[3] 
+    end
+
+    MainTab:Dropdown({
+        Title = "Select Target",
+        List = HardcodedEnemies,
+        Value = savedTarget,
+        Callback = function(Value)
+            MoMoConfig.SelectedEnemy = Value
+            CheckAndSave()
+        end
+    })
+
+    MainTab:Section({Title = "Auto Farm Functions"})
+
+    MainTab:Toggle({
+        Title = "Auto Teleport to Target",
+        Desc = "Teleport and stick to target based on mode (Auto pause in Raid)",
+        Value = MoMoConfig.AutoTeleport,
+        Callback = function(State)
+            MoMoConfig.AutoTeleport = State
+            CheckAndSave()
+            isAutoTeleporting = State
+
+            if isAutoTeleporting then
+                task.spawn(function()
+                    while isAutoTeleporting do
+                        if not isSpinning and not isInRaid and not isLeavingRaid and not isEnteringRaid then
+                            local target = nil
+                            if MoMoConfig.FarmMode == "Select Target" and MoMoConfig.SelectedEnemy ~= "" then
+                                target = getClosestEnemyByName(MoMoConfig.SelectedEnemy)
+                            elseif MoMoConfig.FarmMode == "Near Monster" then
+                                target, _ = getClosestEnemy()
+                            end
+
+                            if target then
+                                local targetRoot = target:FindFirstChild("HumanoidRootPart")
+                                local character = player.Character
+                                if character and targetRoot then
+                                    local playerRoot = character:FindFirstChild("HumanoidRootPart")
+                                    if playerRoot then
+                                        playerRoot.CFrame = targetRoot.CFrame * CFrame.new(0, -2, 5)
+                                    end
+                                end
+                            end
+                        end
+                        task.wait(0.01) 
+                    end
+                end)
+            end
+        end
+    })
+
+    MainTab:Toggle({
+        Title = "Auto Click & Attack",
+        Desc = "Auto attack when enemy is near / Normal click otherwise",
+        Value = MoMoConfig.AutoClick,
+        Callback = function(State)
+            MoMoConfig.AutoClick = State
+            CheckAndSave()
+            isAutoClickRunning = State
+
+            if isAutoClickRunning then
+                task.spawn(function()
+                    while isAutoClickRunning do
+                        if not isEnteringRaid and not isLeavingRaid and not isSpinning then
+                            local targetEnemy, distance = getClosestEnemy()
+
+                            if targetEnemy and distance <= 100 then
+                                local attackArgs = { { { "ClickSystem", "Execute", targetEnemy.Name, n = 3 }, "\002" } }
+                                pcall(function() remoteEvent:FireServer(unpack(attackArgs)) end)
+                            else
+                                local clickArgs = { { { "ClickSystem", "Execute", n = 3 }, "\002" } }
+                                pcall(function() remoteEvent:FireServer(unpack(clickArgs)) end)
+                            end
+                        end
+                        task.wait(0.1)
+                    end
+                end)
+            end
+        end
+    })
+
+    MainTab:Section({Title = "Auto Rebirth System"})
+
+    MainTab:Toggle({
+        Title = "Auto Rebirth",
+        Desc = "Auto rebirth every 7 seconds",
+        Value = MoMoConfig.AutoRebirth,
+        Callback = function(State)
+            MoMoConfig.AutoRebirth = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoRebirth do
+                        local args = { { { "RebirthSystem", "Release", "Ascension", "Normal", n = 4 }, "\002" } }
+                        pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                        task.wait(7) 
+                    end
+                end)
+            end
+        end
+    })
+
+    MainTab:Section({Title = "Auto Potion"})
+
+    MainTab:Dropdown({
+        Title = "Select Potions",
+        List = {
+            "EnergyPotion1", "EnergyPotion2",
+            "DamagePotion1", "DamagePotion2",
+            "DropPotion1", "DropPotion2",
+            "LuckPotion1", "LuckPotion2",
+            "GhostPotion1", "GhostPotion2"
+        },
+        Value = MoMoConfig.SelectedPotions,
+        Multi = true,
+        Callback = function(Value)
+            MoMoConfig.SelectedPotions = Value
+            CheckAndSave()
+        end
+    })
+
+    MainTab:Toggle({
+        Title = "Auto Use Potion",
+        Desc = "Automatically use the selected potions",
+        Value = MoMoConfig.AutoPotion,
+        Callback = function(State)
+            MoMoConfig.AutoPotion = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoPotion do
+                        local potions = MoMoConfig.SelectedPotions
+                        local listToUse = {}
+                        
+                        if type(potions) == "table" then
+                            for k, v in pairs(potions) do
+                                if type(k) == "number" then table.insert(listToUse, v)
+                                elseif v == true then table.insert(listToUse, k) end
+                            end
+                        elseif type(potions) == "string" and potions ~= "" then
+                            table.insert(listToUse, potions)
+                        end
+
+                        for _, potion in ipairs(listToUse) do
+                            if potion and potion ~= "" then
+                                local args = { { { "PotionSystem", "Use", potion, n = 3 }, "\002" } }
+                                pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                                task.wait(0.5) 
+                            end
+                        end
+                        task.wait(5) 
+                    end
+                end)
+            end
+        end
+    })
+
+    MainTab:Section({Title = "Codes"})
+
+    MainTab:Button({
+        Title = "Redeem All Codes",
+        Desc = "Click to redeem all working codes",
+        Callback = function()
+            local codesToRedeem = {
+                "20KLIKES",
+                "SHUTDOWN",
+                "10KLIKES",
+                "5KLIKES",
+                "RELEASE",
+                "EXCHANGE"
+            }
+            
+            task.spawn(function()
+                for _, code in ipairs(codesToRedeem) do
+                    local args = { { { "CodeSystem", "Use", code, n = 3 }, "\002" } }
+                    pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                    task.wait(0.5) 
+                end
+                Window:Notify({Title = "Codes", Desc = "All codes have been redeemed!", Time = 3})
+            end)
+        end
+    })
+end
+
+-- ==========================================
+-- Tab 2: Raid
+-- ==========================================
+local RaidTab = Window:Tab({Title = "Raid", Icon = "swords"}) do 
+    
+    RaidTab:Section({Title = "Raid Entry"})
+
+    RaidTab:Toggle({
+        Title = "Auto Raid (Create & Enter)",
+        Desc = "Auto Create Room > Enter Raid > Attack monsters",
+        Value = MoMoConfig.AutoRaid,
+        Callback = function(State)
+            MoMoConfig.AutoRaid = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoRaid do
+                        if not isInRaid then
+                            local createArgs = { { { "GamemodeSystem", "Create", "Raid", "TitanTown", "Easy", n = 6 }, "\002" } }
+                            pcall(function() remoteEvent:FireServer(unpack(createArgs)) end)
+                            task.wait(1.5)
+
+                            if checkRaidDelay() then
+                                task.wait(5)
+                            else
+                                isEnteringRaid = true 
+                                local startArgs = { { { "GamemodeSystem", "Start", "Raid", 120578156, n = 4 }, "\002" } }
+                                pcall(function() remoteEvent:FireServer(unpack(startArgs)) end)
+                                task.wait(6) 
+                                isEnteringRaid = false
+                            end
+                        else
+                            local targetEnemy, _ = getClosestEnemy()
+                            if targetEnemy and not isLeavingRaid then
+                                local targetRoot = targetEnemy:FindFirstChild("HumanoidRootPart")
+                                local character = player.Character
+                                if character and targetRoot then
+                                    local playerRoot = character:FindFirstChild("HumanoidRootPart")
+                                    if playerRoot then
+                                        playerRoot.CFrame = targetRoot.CFrame * CFrame.new(0, -2, 5)
+                                    end
+                                end
+                            end
+                        end
+                        task.wait(0.01)
+                    end
+                end)
+            end
+        end
+    })
+
+    RaidTab:Section({Title = "Auto Leave Settings"})
+
+    RaidTab:Textbox({
+        Title = "Leave at Wave",
+        Desc = "Enter target wave to leave (e.g. 15)",
+        Placeholder = "15",
+        Value = tostring(MoMoConfig.LeaveWave),
+        ClearTextOnFocus = false,
+        Callback = function(text)
+            MoMoConfig.LeaveWave = text
+            CheckAndSave()
+        end
+    })
+
+    RaidTab:Dropdown({
+        Title = "Return to World",
+        List = {"1", "2", "3", "4"},
+        Value = tostring(MoMoConfig.ReturnWorld),
+        Callback = function(Value)
+            MoMoConfig.ReturnWorld = Value
+            CheckAndSave()
+        end
+    })
+
+    RaidTab:Toggle({
+        Title = "Auto Leave Raid",
+        Desc = "Automatically leave raid when reaching the target wave",
+        Value = MoMoConfig.AutoLeaveRaid,
+        Callback = function(State)
+            MoMoConfig.AutoLeaveRaid = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoLeaveRaid do
+                        if isInRaid then
+                            local leaveTarget = tonumber(MoMoConfig.LeaveWave) or 0
+                            if leaveTarget > 0 then
+                                local currentWave = getCurrentWave()
+                                if currentWave >= leaveTarget and not isLeavingRaid then
+                                    isLeavingRaid = true 
+                                    
+                                    local worldNum = tonumber(MoMoConfig.ReturnWorld) or 3
+                                    local tpArgs = { { { "TeleportSystem", "To", worldNum, n = 3 }, "\002" } }
+                                    
+                                    pcall(function() remoteEvent:FireServer(unpack(tpArgs)) end)
+                                    task.wait(2)
+                                    pcall(function() remoteEvent:FireServer(unpack(tpArgs)) end) 
+                                    
+                                    task.wait(8) 
+                                    isLeavingRaid = false 
+                                end
+                            end
+                        end
+                        task.wait(1) 
+                    end
+                end)
+            end
+        end
+    })
+
+end
+
+-- ==========================================
+-- Tab 3: World
+-- ==========================================
+local WorldTab = Window:Tab({Title = "World", Icon = "globe"}) do 
+    
+    -- =================================
+    -- World 1
+    -- =================================
+    WorldTab:Section({Title = "World 1 (Gacha)"}) 
+
+    WorldTab:Dropdown({
+        Title = "Select Gacha (W1)",
+        List = {"Titan Serum", "Titan Scroll"},
+        Value = MoMoConfig.SelectedSpinW1,
+        Callback = function(Value)
+            MoMoConfig.SelectedSpinW1 = Value
+            CheckAndSave()
+        end
+    })
+
+    WorldTab:Button({
+        Title = "Roll Selected (x1)",
+        Desc = "Roll the selected gacha once (World 1)",
+        Callback = function()
+            if MoMoConfig.SelectedSpinW1 == "Titan Serum" then RollTitanSerumSafe()
+            elseif MoMoConfig.SelectedSpinW1 == "Titan Scroll" then RollTitanScrollSafe() end
+            Window:Notify({Title = "World 1", Desc = "Rolled " .. MoMoConfig.SelectedSpinW1 .. "!", Time = 2})
+        end
+    })
+
+    WorldTab:Toggle({
+        Title = "Auto Roll (World 1)",
+        Desc = "Auto roll the selected gacha in World 1",
+        Value = MoMoConfig.AutoRollW1,
+        Callback = function(State)
+            MoMoConfig.AutoRollW1 = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoRollW1 do
+                        if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                            if MoMoConfig.SelectedSpinW1 == "Titan Serum" then RollTitanSerumSafe()
+                            elseif MoMoConfig.SelectedSpinW1 == "Titan Scroll" then RollTitanScrollSafe() end
+                            task.wait(3.2) 
+                        else
+                            task.wait(1) 
+                        end
+                    end
+                end)
+            end
+        end
+    })
+
+    -- =================================
+    -- World 2
+    -- =================================
+    WorldTab:Section({Title = "World 2 (Gacha)"}) 
+
+    WorldTab:Dropdown({
+        Title = "Select Gacha (W2)",
+        List = {"Possession", "Supernatural Scroll"},
+        Value = MoMoConfig.SelectedSpinW2,
+        Callback = function(Value)
+            MoMoConfig.SelectedSpinW2 = Value
+            CheckAndSave()
+        end
+    })
+
+    WorldTab:Button({
+        Title = "Roll Selected (x1)",
+        Desc = "Roll the selected gacha once (World 2)",
+        Callback = function()
+            if MoMoConfig.SelectedSpinW2 == "Possession" then RollPossessionSafe()
+            elseif MoMoConfig.SelectedSpinW2 == "Supernatural Scroll" then RollSupernaturalScrollSafe() end
+            Window:Notify({Title = "World 2", Desc = "Rolled " .. MoMoConfig.SelectedSpinW2 .. "!", Time = 2})
+        end
+    })
+
+    WorldTab:Toggle({
+        Title = "Auto Roll (World 2)",
+        Desc = "Auto roll the selected gacha in World 2",
+        Value = MoMoConfig.AutoRollW2,
+        Callback = function(State)
+            MoMoConfig.AutoRollW2 = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoRollW2 do
+                        if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                            if MoMoConfig.SelectedSpinW2 == "Possession" then RollPossessionSafe()
+                            elseif MoMoConfig.SelectedSpinW2 == "Supernatural Scroll" then RollSupernaturalScrollSafe() end
+                            task.wait(3.2)  
+                        else
+                            task.wait(1)
+                        end
+                    end
+                end)
+            end
+        end
+    })
+
+    WorldTab:Section({Title = "World 2 (Upgrades)"}) 
+
+    WorldTab:Dropdown({
+        Title = "Select Upgrades",
+        List = {"Energy", "Damage", "Ghost", "Enemy Range"},
+        Value = MoMoConfig.SelectedUpgradesW2, 
+        Multi = true,
+        Callback = function(Value)
+            MoMoConfig.SelectedUpgradesW2 = Value
+            CheckAndSave()
+        end
+    })
+
+    WorldTab:Toggle({
+        Title = "Auto Upgrade",
+        Desc = "Auto upgrade selected items",
+        Value = MoMoConfig.AutoUpgradeW2,
+        Callback = function(State)
+            MoMoConfig.AutoUpgradeW2 = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoUpgradeW2 do
+                        if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                            local upgrades = MoMoConfig.SelectedUpgradesW2
+                            local listToUpgrade = {}
+                            
+                            if type(upgrades) == "table" then
+                                for k, v in pairs(upgrades) do
+                                    if type(k) == "number" then table.insert(listToUpgrade, v)
+                                    elseif v == true then table.insert(listToUpgrade, k) end
+                                end
+                            elseif type(upgrades) == "string" and upgrades ~= "" then
+                                table.insert(listToUpgrade, upgrades)
+                            end
+
+                            for _, upg in ipairs(listToUpgrade) do
+                                if upg and upg ~= "" then
+                                    local args = { { { "UpgradeSystem", "Buy", "Alien", upg, n = 4 }, "\002" } }
+                                    pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                                    task.wait(0.2) 
+                                end
+                            end
+                            task.wait(1) 
+                        else
+                            task.wait(1)
+                        end
+                    end
+                end)
+            end
+        end
+    })
+
+    -- =================================
+    -- World 3
+    -- =================================
+    WorldTab:Section({Title = "World 3 (Gacha)"}) 
+
+    WorldTab:Dropdown({
+        Title = "Select Gacha (W3)",
+        List = {"Spiritual Scroll", "Zanpakuto", "Power of the Planet", "Soul Fundation"},
+        Value = MoMoConfig.SelectedSpinW3,
+        Callback = function(Value)
+            MoMoConfig.SelectedSpinW3 = Value
+            CheckAndSave()
+        end
+    })
+
+    WorldTab:Button({
+        Title = "Roll Selected (x1)",
+        Desc = "Roll the selected gacha once (World 3)",
+        Callback = function()
+            if MoMoConfig.SelectedSpinW3 == "Spiritual Scroll" then RollSpiritualScrollSafe()
+            elseif MoMoConfig.SelectedSpinW3 == "Zanpakuto" then RollZanpakutoSafe()
+            elseif MoMoConfig.SelectedSpinW3 == "Power of the Planet" then RollPowerOfThePlanetSafe()
+            elseif MoMoConfig.SelectedSpinW3 == "Soul Fundation" then RollSoulFundationSafe() end
+            Window:Notify({Title = "World 3", Desc = "Rolled " .. MoMoConfig.SelectedSpinW3 .. "!", Time = 2})
+        end
+    })
+
+    WorldTab:Toggle({
+        Title = "Auto Roll (World 3)",
+        Desc = "Auto roll the selected gacha in World 3",
+        Value = MoMoConfig.AutoRollW3,
+        Callback = function(State)
+            MoMoConfig.AutoRollW3 = State
+            CheckAndSave()
+
+            if State then
+                task.spawn(function()
+                    while MoMoConfig.AutoRollW3 do
+                        if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                            if MoMoConfig.SelectedSpinW3 == "Spiritual Scroll" then RollSpiritualScrollSafe()
+                            elseif MoMoConfig.SelectedSpinW3 == "Zanpakuto" then RollZanpakutoSafe()
+                            elseif MoMoConfig.SelectedSpinW3 == "Power of the Planet" then RollPowerOfThePlanetSafe()
+                            elseif MoMoConfig.SelectedSpinW3 == "Soul Fundation" then RollSoulFundationSafe() end
+                            task.wait(3)  
+                        else
+                            task.wait(1)
+                        end
+                    end
+                end)
+            end
+        end
+    })
+
+end
+
+-- ==========================================
+-- Tab 4: Player
+-- ==========================================
+local PlayerTab = Window:Tab({Title = "Player", Icon = "user"}) do
+    PlayerTab:Section({Title = "Local Player Settings"})
+
+    PlayerTab:Slider({
+        Title = "WalkSpeed",
+        Min = 16,
+        Max = 250,
+        Rounding = 0,
+        Value = MoMoConfig.WalkSpeed,
+        Callback = function(speed)
+            MoMoConfig.WalkSpeed = speed
+            CheckAndSave()
+            if Players.LocalPlayer.Character and Players.LocalPlayer.Character:FindFirstChild("Humanoid") then
+                Players.LocalPlayer.Character.Humanoid.WalkSpeed = speed
+            end
+        end
+    })
+
+    PlayerTab:Slider({
+        Title = "JumpPower",
+        Min = 50,
+        Max = 300,
+        Rounding = 0,
+        Value = MoMoConfig.JumpPower,
+        Callback = function(power)
+            MoMoConfig.JumpPower = power
+            CheckAndSave()
+            if Players.LocalPlayer.Character and Players.LocalPlayer.Character:FindFirstChild("Humanoid") then
+                Players.LocalPlayer.Character.Humanoid.JumpPower = power
+            end
+        end
+    })
+end
+
+-- ==========================================
+-- Tab 5: Settings
+-- ==========================================
+local SettingsTab = Window:Tab({Title = "Settings", Icon = "wrench"}) do
+    SettingsTab:Section({Title = "General Settings"})
+
+    SettingsTab:Button({
+        Title = "Join Discord",
+        Desc = "discord.gg/k2wdyy8QMN",
+        Callback = function()
+            if setclipboard then
+                setclipboard("https://discord.gg/k2wdyy8QMN")
+                Window:Notify({Title = "MoMoHub", Desc = "Discord link copied!", Time = 3})
+            end
+        end
+    })
+
+    local AntiAfkConnection
+    SettingsTab:Toggle({
+        Title = "Anti-AFK",
+        Desc = "Prevent getting kicked for inactivity",
+        Value = MoMoConfig.AntiAFK,
+        Callback = function(State)
+            MoMoConfig.AntiAFK = State
+            CheckAndSave()
+            
+            local p = Players.LocalPlayer
+            if State then
+                AntiAfkConnection = p.Idled:Connect(function()
+                    VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                    task.wait(1)
+                    VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+                end)
+            else
+                if AntiAfkConnection then
+                    AntiAfkConnection:Disconnect()
+                    AntiAfkConnection = nil
+                end
+            end
+        end
+    })
+
+    SettingsTab:Section({Title = "Config System"})
+
+    SettingsTab:Toggle({
+        Title = "Auto Save Config",
+        Desc = "Automatically save settings when changed",
+        Value = MoMoConfig.AutoSave,
+        Callback = function(State)
+            MoMoConfig.AutoSave = State
+            if State then SaveConfig() end
+        end
+    })
+
+    SettingsTab:Toggle({
+        Title = "Auto Load Config",
+        Desc = "Load settings automatically on inject",
+        Value = MoMoConfig.AutoLoad,
+        Callback = function(State)
+            MoMoConfig.AutoLoad = State
+            SaveConfig()
+        end
+    })
+end
+
+-- ==========================================
+-- Finish UI and run loops
+-- ==========================================
+Window:Notify({
+    Title = "MoMoHub",
+    Desc = "Loaded Successfully! " .. (MoMoConfig.AutoLoad and "[Config Applied]" or ""),
+    Time = 4
+})
+
+-- Run Global Status Updater
+task.spawn(function()
+    while task.wait(0.5) do
+        isInRaid = checkIfInRaidMap()
+        
+        if MoMoConfig.AutoRaid or MoMoConfig.AutoLeaveRaid then
+            pcall(autoCloseGameResult)
+        end
+    end
+end)
+
+-- Run Auto Click
+if MoMoConfig.AutoClick then
+    isAutoClickRunning = true
+    task.spawn(function()
+        while isAutoClickRunning do
+            if not isEnteringRaid and not isLeavingRaid and not isSpinning then
+                local targetEnemy, distance = getClosestEnemy()
+                if targetEnemy and distance <= 100 then
+                    local attackArgs = { { { "ClickSystem", "Execute", targetEnemy.Name, n = 3 }, "\002" } }
+                    pcall(function() remoteEvent:FireServer(unpack(attackArgs)) end)
+                else
+                    local clickArgs = { { { "ClickSystem", "Execute", n = 3 }, "\002" } }
+                    pcall(function() remoteEvent:FireServer(unpack(clickArgs)) end)
+                end
+            end
+            task.wait(0.1)
+        end
+    end)
+end
+
+-- Run Auto Teleport
+if MoMoConfig.AutoTeleport then
+    isAutoTeleporting = true
+    task.spawn(function()
+        while isAutoTeleporting do
+            if not isSpinning and not isInRaid and not isLeavingRaid and not isEnteringRaid then
+                local target = nil
+                if MoMoConfig.FarmMode == "Select Target" and MoMoConfig.SelectedEnemy ~= "" then
+                    target = getClosestEnemyByName(MoMoConfig.SelectedEnemy)
+                elseif MoMoConfig.FarmMode == "Near Monster" then
+                    target, _ = getClosestEnemy()
+                end
+
+                if target then
+                    local targetRoot = target:FindFirstChild("HumanoidRootPart")
+                    local character = player.Character
+                    if character and targetRoot then
+                        local playerRoot = character:FindFirstChild("HumanoidRootPart")
+                        if playerRoot then
+                            playerRoot.CFrame = targetRoot.CFrame * CFrame.new(0, -2, 5)
+                        end
+                    end
+                end
+            end
+            task.wait(0.01) 
+        end
+    end)
+end
+
+-- Run Auto Rebirth
+if MoMoConfig.AutoRebirth then
+    task.spawn(function()
+        while MoMoConfig.AutoRebirth do
+            local args = { { { "RebirthSystem", "Release", "Ascension", "Normal", n = 4 }, "\002" } }
+            pcall(function() remoteEvent:FireServer(unpack(args)) end)
+            task.wait(7) 
+        end
+    end)
+end
+
+-- Run Auto Potion
+if MoMoConfig.AutoPotion then
+    task.spawn(function()
+        while MoMoConfig.AutoPotion do
+            local potions = MoMoConfig.SelectedPotions
+            local listToUse = {}
+            if type(potions) == "table" then
+                for k, v in pairs(potions) do
+                    if type(k) == "number" then table.insert(listToUse, v)
+                    elseif v == true then table.insert(listToUse, k) end
+                end
+            elseif type(potions) == "string" and potions ~= "" then table.insert(listToUse, potions) end
+
+            for _, potion in ipairs(listToUse) do
+                if potion and potion ~= "" then
+                    local args = { { { "PotionSystem", "Use", potion, n = 3 }, "\002" } }
+                    pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                    task.wait(0.5)
+                end
+            end
+            task.wait(5)
+        end
+    end)
+end
+
+-- Run Auto Raid (Enter & Attack)
+if MoMoConfig.AutoRaid then
+    task.spawn(function()
+        while MoMoConfig.AutoRaid do
+            if not isInRaid then
+                local createArgs = { { { "GamemodeSystem", "Create", "Raid", "TitanTown", "Easy", n = 6 }, "\002" } }
+                pcall(function() remoteEvent:FireServer(unpack(createArgs)) end)
+                task.wait(1.5)
+
+                if checkRaidDelay() then
+                    task.wait(5)
+                else
+                    isEnteringRaid = true 
+                    local startArgs = { { { "GamemodeSystem", "Start", "Raid", 120578156, n = 4 }, "\002" } }
+                    pcall(function() remoteEvent:FireServer(unpack(startArgs)) end)
+                    task.wait(6) 
+                    isEnteringRaid = false
+                end
+            else
+                local targetEnemy, _ = getClosestEnemy()
+                if targetEnemy and not isLeavingRaid then
+                    local targetRoot = targetEnemy:FindFirstChild("HumanoidRootPart")
+                    local character = player.Character
+                    if character and targetRoot then
+                        local playerRoot = character:FindFirstChild("HumanoidRootPart")
+                        if playerRoot then
+                            playerRoot.CFrame = targetRoot.CFrame * CFrame.new(0, -2, 5)
+                        end
+                    end
+                end
+            end
+            task.wait(0.01)
+        end
+    end)
+end
+
+-- Run Auto Leave Raid
+if MoMoConfig.AutoLeaveRaid then
+    task.spawn(function()
+        while MoMoConfig.AutoLeaveRaid do
+            if isInRaid then
+                local leaveTarget = tonumber(MoMoConfig.LeaveWave) or 0
+                if leaveTarget > 0 then
+                    local currentWave = getCurrentWave()
+                    if currentWave >= leaveTarget and not isLeavingRaid then
+                        isLeavingRaid = true 
+                        
+                        local worldNum = tonumber(MoMoConfig.ReturnWorld) or 3
+                        local tpArgs = { { { "TeleportSystem", "To", worldNum, n = 3 }, "\002" } }
+                        
+                        pcall(function() remoteEvent:FireServer(unpack(tpArgs)) end)
+                        task.wait(2)
+                        pcall(function() remoteEvent:FireServer(unpack(tpArgs)) end) 
+                        
+                        task.wait(8) 
+                        isLeavingRaid = false 
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- Run Auto Roll (World 1)
+if MoMoConfig.AutoRollW1 then
+    task.spawn(function()
+        while MoMoConfig.AutoRollW1 do
+            if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                if MoMoConfig.SelectedSpinW1 == "Titan Serum" then RollTitanSerumSafe()
+                elseif MoMoConfig.SelectedSpinW1 == "Titan Scroll" then RollTitanScrollSafe() end
+                task.wait(3.2)
+            else task.wait(1) end
+        end
+    end)
+end
+
+-- Run Auto Roll (World 2)
+if MoMoConfig.AutoRollW2 then
+    task.spawn(function()
+        while MoMoConfig.AutoRollW2 do
+            if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                if MoMoConfig.SelectedSpinW2 == "Possession" then RollPossessionSafe()
+                elseif MoMoConfig.SelectedSpinW2 == "Supernatural Scroll" then RollSupernaturalScrollSafe() end
+                task.wait(3.2)
+            else task.wait(1) end
+        end
+    end)
+end
+
+-- Run Auto Roll (World 3)
+if MoMoConfig.AutoRollW3 then
+    task.spawn(function()
+        while MoMoConfig.AutoRollW3 do
+            if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                if MoMoConfig.SelectedSpinW3 == "Spiritual Scroll" then RollSpiritualScrollSafe()
+                elseif MoMoConfig.SelectedSpinW3 == "Zanpakuto" then RollZanpakutoSafe()
+                elseif MoMoConfig.SelectedSpinW3 == "Power of the Planet" then RollPowerOfThePlanetSafe()
+                elseif MoMoConfig.SelectedSpinW3 == "Soul Fundation" then RollSoulFundationSafe() end
+                task.wait(3)
+            else task.wait(1) end
+        end
+    end)
+end
+
+-- Run Auto Upgrade (World 2)
+if MoMoConfig.AutoUpgradeW2 then
+    task.spawn(function()
+        while MoMoConfig.AutoUpgradeW2 do
+            if not isInRaid and not isEnteringRaid and not isLeavingRaid then
+                local upgrades = MoMoConfig.SelectedUpgradesW2
+                local listToUpgrade = {}
+                if type(upgrades) == "table" then
+                    for k, v in pairs(upgrades) do
+                        if type(k) == "number" then table.insert(listToUpgrade, v)
+                        elseif v == true then table.insert(listToUpgrade, k) end
+                    end
+                elseif type(upgrades) == "string" and upgrades ~= "" then table.insert(listToUpgrade, upgrades) end
+
+                for _, upg in ipairs(listToUpgrade) do
+                    if upg and upg ~= "" then
+                        local args = { { { "UpgradeSystem", "Buy", "Alien", upg, n = 4 }, "\002" } }
+                        pcall(function() remoteEvent:FireServer(unpack(args)) end)
+                        task.wait(0.2)
+                    end
+                end
+                task.wait(1)
+            else task.wait(1) end
+        end
+    end)
+end
