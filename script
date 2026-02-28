@@ -60,6 +60,7 @@ local function checkRaidDelay()
 end
 
 -- Check if character is inside the Raid map (Based on Spawn distance)
+-- ฟังก์ชันเช็คตำแหน่งว่าอยู่ในเรดหรือไม่ (กวาดหาทุกแมพใน Gamemode)
 local function checkIfInRaidMap()
     local character = player.Character
     if not character then return false end
@@ -70,19 +71,25 @@ local function checkIfInRaidMap()
     if mapFolder then
         local gamemode = mapFolder:FindFirstChild("Gamemode")
         if gamemode then
-            local raidMap = gamemode:FindFirstChild("120578156")
-            if raidMap then
-                local spawnPoint = raidMap:FindFirstChild("Spawn")
-                if spawnPoint and spawnPoint:IsA("BasePart") then
-                    local distance = (playerRoot.Position - spawnPoint.Position).Magnitude
-                    if distance < 3000 then
-                        return true
+            -- วนลูปตรวจดูทุกแมพที่ถูกสร้างขึ้นในโฟลเดอร์ Gamemode
+            for _, raidMap in ipairs(gamemode:GetChildren()) do
+                
+                -- พยายามหาจุด Spawn ก่อน ถ้าไม่มีให้สุ่มหา BasePart ชิ้นไหนก็ได้ในแมพนั้นเพื่อวัดระยะ
+                local targetPart = raidMap:FindFirstChild("Spawn") or raidMap:FindFirstChildWhichIsA("BasePart", true)
+                
+                if targetPart and targetPart:IsA("BasePart") then
+                    local distance = (playerRoot.Position - targetPart.Position).Magnitude
+                    
+                    -- ถ้าระยะห่างน้อยกว่า 5,000 Studs แปลว่าตัวละครเราอยู่ในอาณาเขตของแมพเรดนี้แล้ว
+                    if distance < 1000 then
+                        return true -- ยืนยันว่าอยู่ในเรด!
                     end
                 end
             end
         end
     end
-    return false
+    
+    return false -- ถ้าหาไม่เจอเลย แปลว่าอยู่โลกปกติ
 end
 
 local function getCurrentWave()
